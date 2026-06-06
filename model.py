@@ -228,3 +228,17 @@ class GPT(nn.Module):
         pass
         # TODO: Implement text generation with top-p (nucleus) sampling.
         # top_p: top-p (nucleus) sampling (float, in [0, 1])
+        for _ in range(max_new_tokens):
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :] / temperature
+            probs = F.softmax(logits, dim=-1)
+            probs_sort, probs_idx = probs.sort(dim=-1, descending=True)
+            probs_cum = probs_sort.cumsum(dim=-1)
+            mask = probs_cum - probs_sort >= top_p
+            probs_sort[mask] = 0.0
+            probs_sort = probs_sort / probs_sort.sum(dim=-1, keepdim=True)
+            idx_next = torch.multinomial(probs_sort, num_samples=1)
+            idx_next = torch.gather(probs_idx, -1, idx_next)
+            idx = torch.cat((idx, idx_next), dim=1)
+        return idx

@@ -23,13 +23,48 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         # TODO: Implement the CausalSelfAttention class with RoPE positional Embedding
         # Attributes that could possibly be used: config.n_embd, config.n_head, config.dropout, config.bias
-        pass
+        assert config.n_embd % config.n_head == 0
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        head_dim = config.n_embd // config.n_head
+        theta = 1.0 / (10000.0 ** (torch.arange(0, head_dim, 2).float() / head_dim))
+        pos = torch.arange(config.block_size).float()
+        freqs = torch.outer(pos, theta)
+        self.register_buffer("cos_cached", freqs.cos())
+        self.register_buffer("sin_cached", freqs.sin())
 
     def forward(self, x):
         # shape of x: B, L, C
         # shape of output: B, L, C
         # TODO: Implement the CausalSelfAttention class
-        pass
+        B, L, C = x.size()
+        head_dim = C // self.n_head
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
+        q = q.view(B, L, self.n_head, head_dim).transpose(1, 2)
+        k = k.view(B, L, self.n_head, head_dim).transpose(1, 2)
+        v = v.view(B, L, self.n_head, head_dim).transpose(1, 2)
+        cos = self.cos_cached[:L].view(1, 1, L, -1).repeat_interleave(2, dim=-1)
+        sin = self.sin_cached[:L].view(1, 1, L, -1).repeat_interleave(2, dim=-1)
+        def rotate_half(x):
+            x1 = x[..., :x.shape[-1] // 2]
+            x2 = x[..., x.shape[-1] // 2:]
+            return torch.cat((-x2, x1), dim=-1)
+        q = q * cos + rotate_half(q) * sin
+        k = k * cos + rotate_half(k) * sin
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(head_dim)
+        mask = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
+        att = att.masked_fill(mask, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, L, C)
+        y = self.resid_dropout(self.c_proj(y))
+        return y
 
 class MLP(nn.Module):
     def __init__(self, config):

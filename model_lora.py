@@ -17,12 +17,20 @@ class LoRALinear(nn.Module):
         # TODO: 1. Initialize self.linear as a standard nn.Linear and freeze its weights (requires_grad = False)
         # TODO: 2. If r > 0, register self.lora_A and self.lora_B as learnable parameters (nn.Parameter)
         # TODO: 3. Initialize lora_A with random normal distribution (std = 1/sqrt(r)) and lora_B with zeros
-        pass
+        self.linear = nn.Linear(in_features, out_features, bias=bias)
+        for param in self.linear.parameters():
+            param.requires_grad = False
+        if r > 0:
+            self.lora_A = nn.Parameter(torch.randn(in_features, r) / math.sqrt(r))
+            self.lora_B = nn.Parameter(torch.zeros(r, out_features))
 
     def forward(self, x):
         # TODO: Implement the forward pass incorporating LoRA
         # Formula: output = linear(x) + scaling * (x @ lora_A @ lora_B)
-        pass
+        y = self.linear(x)
+        if self.r > 0:
+            y = y + self.scaling * (x @ self.lora_A @ self.lora_B)
+        return y
 
 class CausalSelfAttentionLoRA(nn.Module):
     def __init__(self, config):
@@ -44,7 +52,20 @@ class CausalSelfAttentionLoRA(nn.Module):
     def forward(self, x):
         # TODO: Implement the CausalSelfAttention process (similar to Task 4.2)
         # Make sure to use self.c_attn(x) to get q, k, v and apply the rest of attention mechanisms
-        pass
+        B, L, C = x.size()
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
+        q = q.view(B, L, self.n_head, C // self.n_head).transpose(1, 2)
+        k = k.view(B, L, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, L, self.n_head, C // self.n_head).transpose(1, 2)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = att.masked_fill(self.bias[:,:,:L,:L] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, L, C)
+        y = self.resid_dropout(self.c_proj(y))
+        return y
 
 
 class BlockLoRA(nn.Module):
