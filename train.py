@@ -1,11 +1,13 @@
 import os
 import time
 import math
+import inspect
 import pickle
 from contextlib import nullcontext
 
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 
 from model import ModelConfig, GPT
 
@@ -15,20 +17,20 @@ from model import ModelConfig, GPT
 out_dir = 'out-wikitext'
 eval_interval = 250
 log_interval = 10
-eval_iters = 200
+eval_iters = 50
 eval_only = False
 always_save_checkpoint = True
-init_from = 'scratch'
+init_from = 'resume'
 load_optimizer_state = True
 
 # Data
 dataset = 'wikitext_large'
-gradient_accumulation_steps = 5 * 8
-batch_size = 12
-block_size = 1024
+gradient_accumulation_steps = 8
+batch_size = 4
+block_size = 512
 
 # Model Architecture
-n_layer = 8
+n_layer = 4
 n_head = 8
 n_embd = 512
 dropout = 0.2
@@ -49,9 +51,9 @@ lr_decay_iters = 20000
 min_lr = 6e-5
 
 # System
-device = 'cpu' # you can set device to 'cuda' if you are using a gpu
+device = 'cuda' # you can set device to 'cuda' if you are using a gpu
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
-compile = True
+compile = False  # TODO: set to True after fixing slow Triton compile on Windows
 
 # Override config from CLI/config file
 config_keys = [k for k, v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -101,14 +103,23 @@ if init_from == 'scratch':
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     checkpoint = torch.load(os.path.join(out_dir, 'ckpt.pt'), map_location=device)
-    for k in model_args:
-        if k in checkpoint['model_args']:
-            model_args[k] = checkpoint['model_args'][k]
-    model = GPT(ModelConfig(**model_args))
+    # Infer model architecture from the actual state dict (more reliable than checkpoint['model_args'])
     state_dict = checkpoint['model']
     for k in list(state_dict):
         if k.startswith('_orig_mod.'):
             state_dict[k[len('_orig_mod.'):]] = state_dict.pop(k)
+    # Extract n_layer, n_embd, block_size from state dict shapes
+    n_layers_from_ckpt = max(int(k.split('.')[2]) for k in state_dict if k.startswith('transformer.h.'))
+    model_args['n_layer'] = n_layers_from_ckpt + 1  # 0-indexed, so add 1
+    model_args['n_embd'] = state_dict['transformer.wte.weight'].shape[1]
+    model_args['block_size'] = state_dict['transformer.wpe.weight'].shape[0]
+    model_args['vocab_size'] = state_dict['transformer.wte.weight'].shape[0]
+    model_args['bias'] = 'transformer.h.0.attn.c_attn.bias' in state_dict
+    print(f"Inferred from checkpoint: n_layer={model_args['n_layer']}, n_embd={model_args['n_embd']}, block_size={model_args['block_size']}, vocab_size={model_args['vocab_size']}, bias={model_args['bias']}")
+    # Sync global variables with inferred architecture
+    n_layer = model_args['n_layer']
+    block_size = model_args['block_size']
+    model = GPT(ModelConfig(**model_args))
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
@@ -124,7 +135,37 @@ raw_model = model
 # you could use mixed precision training if you are familar with it
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 if init_from == 'resume' and load_optimizer_state:
-    optimizer.load_state_dict(checkpoint['optimizer'])
+    try:
+        # Filter optimizer state: skip params whose shape doesn't match the current model
+        # (e.g. when block_size was changed via crop_block_size)
+        ckpt_opt = checkpoint['optimizer']
+        ckpt_state = ckpt_opt['state']
+        cleaned_state = {}
+        skipped = 0
+        for param_id, state in ckpt_state.items():
+            # Check if this state entry matches any current optimizer param
+            matched = False
+            for pg in optimizer.param_groups:
+                for p in pg['params']:
+                    if 'exp_avg' in state and state['exp_avg'].shape == p.shape:
+                        cleaned_state[param_id] = state
+                        matched = True
+                        break
+                if matched:
+                    break
+            if not matched:
+                skipped += 1
+        if skipped > 0:
+            print(f"Skipped {skipped} optimizer state entries due to shape mismatch (e.g. cropped block_size)")
+            ckpt_opt['state'] = cleaned_state
+        optimizer.load_state_dict(ckpt_opt)
+        # Ensure fused flag is consistent
+        for pg in optimizer.param_groups:
+            pg['fused'] = False  # safer to use non-fused after loading state
+        optimizer.defaults['fused'] = False
+        print("Optimizer state loaded successfully")
+    except (ValueError, RuntimeError) as e:
+        print(f"Warning: could not load optimizer state ({e}), using fresh optimizer")
 checkpoint = None
 
 if compile:
@@ -159,6 +200,10 @@ X, Y = get_batch('train')
 t0 = time.time()
 local_iter_num = 0
 
+# 记录 loss 用于画图
+train_losses = []    # (iter_num, loss)
+val_losses = []      # (iter_num, loss)
+
 while iter_num <= max_iters:
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
@@ -167,6 +212,8 @@ while iter_num <= max_iters:
     # every eval_interval evaluate the model on train and val sets and write checkpoints
     if iter_num % eval_interval == 0:
         losses = estimate_loss()
+        train_losses.append((iter_num, losses['train']))
+        val_losses.append((iter_num, losses['val']))
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
@@ -183,7 +230,7 @@ while iter_num <= max_iters:
     if iter_num == 0 and eval_only:
         break
 
-    # TODO
+    # gradient accumulation
     for micro_step in range(gradient_accumulation_steps):
         X, Y = get_batch('train')
         _, loss = model(X, Y)
@@ -202,3 +249,26 @@ while iter_num <= max_iters:
 
     iter_num += 1
     local_iter_num += 1
+
+# ----------------------------- Plot Loss Curves ----------------------------------
+print("\nTraining complete! Plotting loss curves...")
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# 左图：eval 时的 train/val loss
+if val_losses:
+    train_iters, train_vals = zip(*train_losses)
+    val_iters, val_vals = zip(*val_losses)
+    axes[0].plot(train_iters, train_vals, label='Train Loss', marker='o', markersize=3)
+    axes[0].plot(val_iters, val_vals, label='Val Loss', marker='s', markersize=3)
+    axes[0].set_xlabel('Iteration')
+    axes[0].set_ylabel('Loss')
+    axes[0].set_title('Train & Validation Loss')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+fig.tight_layout()
+plot_path = os.path.join(out_dir, 'loss_curve.png')
+plt.savefig(plot_path, dpi=150)
+print(f"Loss curve saved to {plot_path}")
+plt.show()
