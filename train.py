@@ -7,14 +7,66 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
+import torch.nn as nn
 import matplotlib.pyplot as plt
 
 from model_RoPE import ModelConfig, GPT
 
+
+# ----------------------------- LoRA Utilities ----------------------------------
+class LoRALinear(nn.Module):
+    """对任意 nn.Linear 层叠加 LoRA 低秩适配器，原权重冻结"""
+    def __init__(self, linear: nn.Linear, r: int = 8, lora_alpha: int = 16):
+        super().__init__()
+        self.linear = linear
+        for p in self.linear.parameters():
+            p.requires_grad = False
+        self.r = r
+        self.lora_alpha = lora_alpha
+        self.scaling = lora_alpha / r if r > 0 else 0.0
+        in_f, out_f = linear.in_features, linear.out_features
+        # 在原始 linear 权重所在设备上创建 LoRA 参数
+        device = linear.weight.device
+        self.lora_A = nn.Parameter(torch.randn(in_f, r, device=device) / math.sqrt(r))
+        self.lora_B = nn.Parameter(torch.zeros(r, out_f, device=device))
+
+    def forward(self, x):
+        y = self.linear(x)
+        if self.r > 0:
+            y = y + self.scaling * (x @ self.lora_A @ self.lora_B)
+        return y
+
+
+def apply_lora_to_model(model: nn.Module, r: int = 8, lora_alpha: int = 16) -> nn.Module:
+    """遍历模型，对所有 nn.Linear 层叠加 LoRA（跳过 lm_head 以保持 weight tying）"""
+    lora_modules = []
+    for name, module in model.named_modules():
+        # 跳过 LoRALinear 自身、lm_head（与 wte 共享权重）、Embedding、LayerNorm 等
+        if isinstance(module, LoRALinear):
+            continue
+        for child_name, child in module.named_children():
+            if isinstance(child, nn.Linear) and not isinstance(child, LoRALinear):
+                # 跳过 lm_head（与 transformer.wte weight-tying，保持共享）
+                if child_name == 'lm_head':
+                    for p in child.parameters():
+                        p.requires_grad = False
+                    continue
+                lora_linear = LoRALinear(child, r=r, lora_alpha=lora_alpha)
+                setattr(module, child_name, lora_linear)
+                lora_modules.append(f"{name}.{child_name}" if name else child_name)
+    print(f"Applied LoRA to {len(lora_modules)} linear layers: {lora_modules}")
+    return model
+
+
+def count_parameters(model: nn.Module):
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total, trainable
+
 # ----------------------------- Configuration ----------------------------------
 # Default values for GPT-2 (124M) training on WikiText
 # I/O
-out_dir = 'out-wikitext'
+out_dir = 'out-wikitext-lora'
 eval_interval = 250
 log_interval = 10
 eval_iters = 50
@@ -35,6 +87,11 @@ n_head = 8
 n_embd = 512
 dropout = 0.2
 bias = True
+
+# LoRA Settings
+use_lora = True          # 开关：是否使用 LoRA 训练
+lora_r = 8               # LoRA 秩
+lora_alpha = 16          # LoRA 缩放系数 (scaling = alpha / r)
 
 # Optimizer Settings
 learning_rate = 6e-4
@@ -140,11 +197,33 @@ if block_size < model.config.block_size:
             block.attn.sin_cached = block.attn.sin_cached[:block_size]
 
 model.to(device)
+
+# ---------- LoRA 改造（在 to(device) 之后、optimizer 之前）----------
+if use_lora and init_from == 'scratch':
+    print("\n=== Applying LoRA to all linear layers ===")
+    total_before, trainable_before = count_parameters(model)
+    print(f"Before LoRA: total={total_before/1e6:.2f}M, trainable={trainable_before/1e6:.2f}M")
+    model = apply_lora_to_model(model, r=lora_r, lora_alpha=lora_alpha)
+    total_after, trainable_after = count_parameters(model)
+    print(f"After LoRA:  total={total_after/1e6:.2f}M, trainable={trainable_after/1e6:.2f}M")
+    print(f"Trainable params reduced: {(trainable_before - trainable_after)/1e6:.2f}M ({(1 - trainable_after/trainable_before)*100:.1f}% fewer)")
+    # 冻结 embedding（与 lm_head weight-tying）
+    model.transformer.wte.weight.requires_grad = False
+
 raw_model = model
 
 # scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 # you could use mixed precision training if you are familar with it
-optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+
+# ---------- Optimizer: LoRA 模式下只优化 LoRA 参数 ----------
+if use_lora:
+    lora_params = [p for n, p in model.named_parameters() if p.requires_grad]
+    print(f"Optimizer will update {len(lora_params)} parameter tensors "
+          f"({sum(p.numel() for p in lora_params)/1e6:.2f}M params)")
+    optimizer = torch.optim.AdamW(lora_params, lr=learning_rate,
+                                  betas=(beta1, beta2), weight_decay=weight_decay)
+else:
+    optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 if init_from == 'resume' and load_optimizer_state:
     try:
         # Filter optimizer state: skip params whose shape doesn't match the current model
