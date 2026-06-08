@@ -1,0 +1,77 @@
+Loading checkpoint from out-wikitext\ckpt.pt ...
+number of parameters: 38.37M
+Model loaded. Iteration: 20000, Best val loss: 3.9494
+
+================================================================================
+  策略1: Top-k 采样 (top_k=200, temperature=0.8)
+================================================================================
+
+--- Sample 1 ---
+
+= = = =
+
+
+The Japanese occupation had been completed in 1941 . The Japanese were at sea with the help of the Japanese Army Air Forces and the Japanese Army Air Training Command under Kokishi , the first from the Far East to be used for defense of Japan . It was the first time in World War II that a Japanese naval presence in the Pacific at the time was common . The American landings were not fully loaded in the Far East , because Japanese had no combat experience with the Japanese during the Occupation of Japan . In June 1942 , Japanese forces engaged Japanese , in the Battle of the Philippine Sea where they were attacked by Japanese forces .
+
+An American reconnaissance aircraft carrier was sent to the United Kingdom for a Pacific war , the Japanese took part in the Battle of Pearl Harbor , and were tasked with supporting Japanese forces out of the Pacific , in conjunction with the United States Army 's 1st Air Fleet ( USAAF ) . The Japanese were the only Japanese carriers of the war
+
+
+--- Sample 2 ---
+
+
+= = = =
+
+
+In October 2007 , the Humbertooth Mountain National League ( MLB ) named the Texas Rangers of the Class A League ( NL ) . Béxarán was named by the Tópez . He was released from the Indians on July 7 , 2007 . After deciding to retire for the rest of his career , he was selected for the 2009 World Series .
+
+
+= = Awards = =
+
+
+After entering the major leagues , Béxar League won the Pacific Coast League ( NL ) Rookie of the Year award . He was named to the Rookie of the Year Award . He also received the Star League Rookie of the Year award from the Sporting News . After completing the Phillies ' eight @-@ year contract , he was named the Phillies ' starting pitcher in 2008 , as the Baseball Hall of Fame . Béxarán finished the season with a 10 – 2 record and a 2 @.@ 83 ERA . He had a 3 @.
+
+
+--- Sample 3 ---
+
+Loy 's capture came on 24 March , when he assaulted a boat from the cruiser San Antonio , Texas . He was quickly unable to bring the two troops back to the town , but his battalion , under Lieutenant Colonel Daniel D. Butler , moved forward to assist in the capture of all of Texas . The remainder of the battalion 's men reached the interior of the town , where they engaged the militia of the nearby Hoosiers . The men were defeated by the force , but they were quickly captured by the Puckians . That night the American soldiers attempted to advance far across the Lake Tees in the north and attacked the river .
+
+At dawn , the Americans surrendered to the Confederates . The few days after the battle , the soldiers of the Anesans sent out a number of homes and local militia in the town of Tees . A small group of soldiers and soldiers , led by Colonel Butler 's wife and four of the men , moved into the town and killed one
+
+
+================================================================================
+  策略2: Nucleus / Top-p 采样 (top_p=0.9, temperature=0.8)
+================================================================================
+
+--- Sample 1 ---
+
+= = = Production = = =
+
+
+The episode originally aired on May 14 , 2000 in the United States on NBC 's network . It was written by series creator Chris Carter and directed by series creator Chris Carter , with writer Jason DeBittioff , directed by David Duchovny , and directed by David Duchovny . "" The Island "" was written by co @-@ executive producer Seth MacFarlane , and directed by series creator Seth MacFarlane , and directed by David Duchovny . It originally aired on the Fox network in the United States on September 12 , 2000 . It was directed by series creator Seth MacFarlane , who has appeared as the director of the series , and was directed by series co @-@ creator Chris Carter . The episode has received mixed reviews from television critics .
+
+
+= = Plot = =
+
+
+
+= = = Meanwhile , Peter 's father and his wife = = =
+
+
+In the early years of
+
+
+--- Sample 2 ---
+
+
+In the end of the same year , the <unk> brothers were raised to a <unk> in the English countryside , whose father was an inspiration for the <unk> , was probably one of the most influential Dutch characters in the 19th century . In the early 20th century , the literary movement , combined with the folklore of the religion , has been cited as the result of the strong cultural impact of the Middle East . The British School was founded in the late 17th century as a modern @-@ day school . In 1773 , the school was expanded into a full @-@ time school and became a new school . In the 1860s , the school was formed with the school 's first story , "" The Old English School , "" which was in the later Middle Ages , as it was described as a school building with a "" Catholic concept of the school "" . The school 's first published design , called "" the Old High School "" , was founded in 1848
+
+
+--- Sample 3 ---
+
+
+
+When the two men were on a train journey to the vicinity of Quineworth , they were greeted by King William IV , who had been taken prisoner by the King . The two men were forced to flee to Quineworth , where they were chased and taken by the Queen 's police . They were later killed in the flames , and the King 's crew fled the cottage , where King Edward VII 's son Henry III was killed .
+
+The King was captured by King Edward VI in 1537 . Edward 's last escape to Scotland was a major incident of the Wars of the Roses between Henry VI and the King Edward VII . Edward III 's final move to Scotland in 1639 to the throne of England , with Edward VI as the king 's flagship , Edward VII , who , in 1639 , granted the lands to his son , Henry VII .
+
+Edward VII , with the English crown , died at the Tower of London , on the other hand , the
