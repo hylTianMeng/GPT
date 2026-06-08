@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from model import ModelConfig, GPT
+from model_RoPE import ModelConfig, GPT
 
 # ----------------------------- Configuration ----------------------------------
 # Default values for GPT-2 (124M) training on WikiText
@@ -20,8 +20,8 @@ log_interval = 10
 eval_iters = 50
 eval_only = False
 always_save_checkpoint = True
-init_from = 'resume'
-load_optimizer_state = True
+init_from = 'scratch'
+load_optimizer_state = False
 
 # Data
 dataset = 'wikitext_large'
@@ -96,27 +96,33 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   bias=bias, vocab_size=50304, dropout=dropout)
 
 if init_from == 'scratch':
-    print("Initializing a new model from scratch")
+    print("Initializing a new model from scratch (using RoPE positional encoding)")
     gptconf = ModelConfig(**model_args)
     model = GPT(gptconf)
 
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     checkpoint = torch.load(os.path.join(out_dir, 'ckpt.pt'), map_location=device)
-    # Infer model architecture from the actual state dict (more reliable than checkpoint['model_args'])
     state_dict = checkpoint['model']
     for k in list(state_dict):
         if k.startswith('_orig_mod.'):
             state_dict[k[len('_orig_mod.'):]] = state_dict.pop(k)
-    # Extract n_layer, n_embd, block_size from state dict shapes
+    # Extract n_layer, n_embd from state dict shapes
     n_layers_from_ckpt = max(int(k.split('.')[2]) for k in state_dict if k.startswith('transformer.h.'))
-    model_args['n_layer'] = n_layers_from_ckpt + 1  # 0-indexed, so add 1
+    model_args['n_layer'] = n_layers_from_ckpt + 1
     model_args['n_embd'] = state_dict['transformer.wte.weight'].shape[1]
-    model_args['block_size'] = state_dict['transformer.wpe.weight'].shape[0]
+    # RoPE model doesn't have wpe; infer block_size from cos_cached buffer
+    if 'transformer.wpe.weight' in state_dict:
+        model_args['block_size'] = state_dict['transformer.wpe.weight'].shape[0]
+    else:
+        # RoPE model: try to get block_size from cos_cached or use config default
+        for k in state_dict:
+            if 'cos_cached' in k:
+                model_args['block_size'] = state_dict[k].shape[0]
+                break
     model_args['vocab_size'] = state_dict['transformer.wte.weight'].shape[0]
     model_args['bias'] = 'transformer.h.0.attn.c_attn.bias' in state_dict
     print(f"Inferred from checkpoint: n_layer={model_args['n_layer']}, n_embd={model_args['n_embd']}, block_size={model_args['block_size']}, vocab_size={model_args['vocab_size']}, bias={model_args['bias']}")
-    # Sync global variables with inferred architecture
     n_layer = model_args['n_layer']
     block_size = model_args['block_size']
     model = GPT(ModelConfig(**model_args))
@@ -127,6 +133,11 @@ elif init_from == 'resume':
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
     model_args['block_size'] = block_size
+    # Also update RoPE cos/sin caches if they exist
+    for block in model.transformer.h:
+        if hasattr(block.attn, 'cos_cached'):
+            block.attn.cos_cached = block.attn.cos_cached[:block_size]
+            block.attn.sin_cached = block.attn.sin_cached[:block_size]
 
 model.to(device)
 raw_model = model
